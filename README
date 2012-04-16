@@ -1,0 +1,39 @@
+Requiem-Manager Overview
+========================
+
+Requiem-Manager server is the Requiem events collector.
+
+Requiem-Manager is a high availability server that accepts secured connections from 
+distributed sensors or other managers and saves received events to a media specified 
+by the user (database, logfile, mail, etc).
+
+The server is a high availability server capable of handling large number of connections, 
+and processing large amounts of events. It uses a per client scheduling queues in order to 
+process events by severity fairly accross clients. 
+
+
+
+REQUIREMENTS
+============
+
+You need to install librequiem on your system before compiling Requiem-Manager.
+
+
+
+IRC
+===
+
+If there's something you just can't find out elsewhere, you want to
+give feedback directly to the authors or you're just bored, visit
+#requiem on irc.freenode.net
+
+
+
+Get Support
+===========
+
+
+Requiem-user mailing list archives can be accessed at:
+	https://groups.google.com/forum/#!forum/requiem-forasiem
+
+

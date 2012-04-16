@@ -1,0 +1,350 @@
+AC_INIT
+AC_PREREQ(2.59)
+AC_CANONICAL_TARGET([])
+AM_INIT_AUTOMAKE(requiem-manager, 1.0.1)
+AM_CONFIG_HEADER(config.h)
+AM_DISABLE_STATIC
+
+AM_MAINTAINER_MODE
+
+
+dnl **********************************************************
+dnl * Check required program.
+dnl **********************************************************
+
+AC_PROG_CPP
+AC_PROG_CC
+AC_PROG_INSTALL
+AC_PROG_MAKE_SET
+
+
+dnl **********************************************************
+dnl * Setup GnuLib, libtool and libltdl.
+dnl **********************************************************
+
+gl_EARLY
+AC_LIBTOOL_DLOPEN
+AM_DISABLE_STATIC
+AC_PROG_LIBTOOL
+
+
+dnl **************************************************
+dnl * Check for missing function replacement         *
+dnl **************************************************
+
+gl_SOURCE_BASE(libmissing)
+gl_M4_BASE(libmissing/m4)
+gl_INIT
+
+
+dnl **************************************************
+dnl * Check for librequiem                           *
+dnl **************************************************
+
+AM_PATH_LIBREQUIEM(0.9.21.3, ,
+  AC_MSG_ERROR(Cannot find librequiem: Is librequiem-config in the path?), no)
+
+dnl ***
+dnl *** Can we use -Werror -Wmissing-braces for some checks ? ***
+buggy_pthread_cppflags=""
+AX_C_CHECK_FLAG(-Werror -Wno-missing-braces, , , buggy_pthread_cppflags="-Wno-missing-braces")
+
+
+old_CFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS $buggy_pthread_cppflags"
+
+AC_MSG_CHECKING(for buggy pthread mutex initializers)
+AC_TRY_COMPILE(
+[
+#include <pthread.h>
+],
+[
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+],
+compile_ok="yes", compile_ok="no")
+
+CFLAGS="$old_CFLAGS"
+
+if test x$compile_ok = xyes; then
+   AC_MSG_RESULT(no)
+else
+   AC_MSG_RESULT(yes)
+   buggy_pthread_initializers="yes"
+fi
+
+
+dnl **************************************************
+dnl * Check for GnuTLS.                              *
+dnl **************************************************
+GNUTLS_MIN_VERSION=1.0.17
+
+PKG_CHECK_MODULES([LIBGNUTLS], [gnutls >= $GNUTLS_MIN_VERSION], [],
+                  [AM_PATH_LIBGNUTLS($GNUTLS_MIN_VERSION, [], [AC_MSG_ERROR($LIBGNUTLS_PKG_ERRORS)])])
+
+old_LIBS=$LIBS
+old_CPPFLAGS=$CPPFLAGS
+LIBS="$LIBGNUTLS_LIBS"
+CPPFLAGS="$LIBGNUTLS_CFLAGS"
+
+AC_CHECK_LIB(gnutls, gnutls_priority_init, gnutls_string_priority=yes, gnutls_string_priority=no)
+if test x$gnutls_string_priority = xyes; then
+        AC_CHECK_LIB(gnutls, gnutls_priority_set, AC_DEFINE_UNQUOTED(HAVE_GNUTLS_STRING_PRIORITY, , Define whether GnuTLS provide priority parsing),)
+fi
+
+AC_CHECK_HEADER(gnutls/gnutls.h, ,
+                AC_MSG_ERROR("libgnutls development headers are required to build librequiem"))
+
+CPPFLAGS=$old_CPPFLAGS
+LIBS=$old_LIBS
+
+
+
+dnl **************************************************
+dnl * Check for librequiemdb                         *
+dnl **************************************************
+
+AM_PATH_LIBREQUIEMDB(0.9.4, enable_librequiemdb=yes, enable_librequiemdb=no, no)
+AM_CONDITIONAL(HAVE_LIBREQUIEMDB, test x$enable_librequiemdb = xyes)
+if test x$enable_librequiemdb = xyes; then
+        AC_DEFINE_UNQUOTED(HAVE_LIBREQUIEMDB, , Define whether librequiemdb is available)
+fi
+
+
+
+dnl ********************************************************
+dnl * Check for the Libxml2                                *
+dnl ********************************************************
+
+AM_PATH_XML2(, enable_xmlmod=yes, enable_xmlmod=no)
+AM_CONDITIONAL(HAVE_XML2, test x$enable_xmlmod = xyes)
+
+
+
+dnl **************************************************
+dnl * TCP WRAPPER CHECK                              *
+dnl **************************************************
+
+AC_ARG_WITH(libwrap-prefix, AC_HELP_STRING(--with-libwrap-prefix@<:@=PFX@:>@,
+                                    Compile in libwrap (tcp_wrappers) support @<:@default=auto@:>@.),
+            libwrap_required=true, with_libwrap="yes")
+
+if test x$with_libwrap != xno; then
+   LIBWRAP_INCLUDE="tcpd.h"
+
+   if test -d $with_libwrap; then
+      LIBWRAP_PATH="$with_libwrap"
+      LIBWRAP_INCLUDE="$with_libwrap/include/tcpd.h"
+   fi
+
+   AC_CHECK_HEADER($LIBWRAP_INCLUDE, with_libwrap=yes, with_libwrap=no)
+
+   if test x$with_libwrap = xyes; then
+      AC_CHECK_LIB(wrap, request_init, LIBWRAP_LIBS="-L$LIBWRAP_PATH/lib -lwrap")
+      AC_CHECK_LIB(nsl, yp_get_default_domain, LIBNSL_LIBS="-lnsl")
+
+      AC_MSG_CHECKING(whether -lwrap require -lnsl)
+      old_LIBS=$LIBS
+      LIBS=$LIBWRAP_LIBS
+
+      AC_TRY_LINK([extern int hosts_access; int allow_severity, deny_severity;],
+                  [return hosts_access;], with_libwrap=yes, with_libwrap=no)
+
+      require_nsl="no"
+      if test x$with_libwrap = xno; then
+         LIBS="$LIBNSL_LIBS $LIBS"
+         AC_TRY_LINK([extern int hosts_access; int allow_severity, deny_severity;],
+                     [return hosts_access;], [with_libwrap=yes require_nsl="yes"], with_libwrap=no)
+      fi
+
+      AC_MSG_RESULT($require_nsl)
+   fi
+
+   LIBWRAP_LIBS=$LIBS
+   LIBS=$old_LIBS
+
+   if test x$libwrap_required = xtrue && test x$with_libwrap = xno; then
+      AC_MSG_ERROR([Could not find libwrap library])
+   fi
+fi
+
+if test x$with_libwrap = xyes; then
+   AC_DEFINE_UNQUOTED(HAVE_TCP_WRAPPERS, [], Define if tcp wrapper support is enabled)
+fi
+
+
+
+dnl ********************************************************
+dnl * Configure embedded libev                             *
+dnl ********************************************************
+
+AC_DEFINE_UNQUOTED(EV_USE_INOTIFY, 0, Disable unused libev inotify backend)
+AC_DEFINE_UNQUOTED(EV_PERIODIC_ENABLE, 0, Disable unused libev periodic timers)
+AC_DEFINE_UNQUOTED(EV_STAT_ENABLE, 0, Disable unused libev stat watchers)
+AC_DEFINE_UNQUOTED(EV_IDLE_ENABLE, 0, Disable unused libev idle watchers)
+AC_DEFINE_UNQUOTED(EV_FORK_ENABLE, 0, Disable unused libev fork watchers)
+AC_DEFINE_UNQUOTED(EV_EMBED_ENABLE, 0, Disable unused libev embed watchers)
+
+m4_include([libev/libev.m4])
+
+
+
+dnl **************************************************
+dnl * Check for Ipv6.                                *
+dnl **************************************************
+
+AC_CHECK_TYPES([struct sockaddr_in6], have_ipv6_type=yes,, [
+ #include <sys/types.h>
+ #include <sys/socket.h>
+ #include <netinet/in.h>
+])
+
+AC_CHECK_DECL(AF_INET6, have_ipv6_def=yes,, [
+ #include <sys/types.h>
+ #include <sys/socket.h>
+ #include <netinet/in.h>
+])
+
+if test x$have_ipv6_type = xyes && test x$have_ipv6_def = xyes; then
+        AC_DEFINE_UNQUOTED(HAVE_IPV6, , Define whether Ipv6 is available on this system)
+fi
+
+
+
+
+dnl **************************************************
+dnl * Typedefs, structures, compiler characteristics.*
+dnl **************************************************
+
+AC_C_CONST
+AC_TYPE_UID_T
+AC_TYPE_PID_T
+AC_TYPE_SIZE_T
+AC_HEADER_TIME
+AC_TYPE_SIGNAL
+AC_C_INLINE
+AC_C_BIGENDIAN
+AC_SYS_LARGEFILE
+
+
+
+dnl **************************************************
+dnl * Setup custom compiler flags                    *
+dnl **************************************************
+
+AC_MSG_CHECKING(for platform-specific compiler flags)
+case "$host_os" in
+ darwin*)
+        # It may be called "cc", but it's really a GCC derivative
+        # with a problematic special precompiler and precompiled
+        # headers; turn off the special precompiler, as some
+        # apparently-legal code won't compile with its precompiled
+        # headers.
+        AC_MSG_RESULT(Darwin: adding -no-cpp-precomp)
+        AX_C_CHECK_FLAG(-no-cpp-precomp, , , GLOBAL_CFLAGS="$GLOBAL_CFLAGS -no-cpp-precomp")
+        ;;
+ *)
+        AC_MSG_RESULT(none needed)
+        ;;
+esac
+
+AC_PROG_CXX
+AX_LD_CHECK_FLAG(-z relro, , , LDFLAGS="$LDFLAGS -z relro")
+AX_LD_CHECK_FLAG(-z now, , , LDFLAGS="$LDFLAGS -z now")
+
+for i in -Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations \
+         -Wbad-function-cast -Wcast-qual -Wcast-align -Wnested-externs -Wunused \
+         -Wformat -Wformat-security; do
+        AX_C_CHECK_FLAG($i, , , GLOBAL_CFLAGS="$GLOBAL_CFLAGS $i")
+done
+
+if test x$buggy_pthread_initializers = xyes; then
+   AX_C_CHECK_FLAG(-Wno-missing-braces, , , GLOBAL_CFLAGS="$GLOBAL_CFLAGS -Wno-missing-braces")
+fi
+
+
+dnl **************************************************
+dnl * Setup build variable                           *
+dnl **************************************************
+
+AS_AC_EXPAND(LIBDIR, $libdir)
+AS_AC_EXPAND(DATADIR, $datadir)
+AS_AC_EXPAND(DOCDIR, $docdir)
+AS_AC_EXPAND(SYSCONFDIR, $sysconfdir)
+AS_AC_EXPAND(LOCALSTATEDIR, $localstatedir)
+
+configdir=$SYSCONFDIR/requiem-manager
+requiem_manager_conf=$configdir/requiem-manager.conf
+plugindir=$LIBDIR/requiem-manager
+report_plugin_dir=$plugindir/reports
+decode_plugin_dir=$plugindir/decodes
+filter_plugin_dir=$plugindir/filters
+db_plugin_dir=$plugindir/db
+
+manager_failover_dir=$LOCALSTATEDIR/spool/requiem-manager/failover
+manager_scheduler_dir=$LOCALSTATEDIR/spool/requiem-manager/scheduler
+manager_run_dir=$LOCALSTATEDIR/run/requiem-manager
+
+AC_DEFINE_UNQUOTED(REPORT_PLUGIN_DIR, "$report_plugin_dir", Requiem-Manager report plugin directory)
+AC_DEFINE_UNQUOTED(DECODE_PLUGIN_DIR, "$decode_plugin_dir", Requiem-Manager decode plugin directory)
+AC_DEFINE_UNQUOTED(FILTER_PLUGIN_DIR, "$filter_plugin_dir", Requiem-Manager filter plugin directory)
+AC_DEFINE_UNQUOTED(MANAGER_SCHEDULER_DIR, "$manager_scheduler_dir", Requiem-Manager scheduler directory)
+AC_DEFINE_UNQUOTED(MANAGER_FAILOVER_DIR, "$manager_failover_dir", Requiem-Manager failover directory)
+AC_DEFINE_UNQUOTED(MANAGER_RUN_DIR, "$manager_run_dir", Requiem-Manager run directory)
+AC_DEFINE_UNQUOTED(REQUIEM_MANAGER_CONFDIR, "$configdir", Define the Requiem Manager configuration directory)
+AC_DEFINE_UNQUOTED(REQUIEM_MANAGER_CONF, "$requiem_manager_conf", Define the Requiem Manager configuration file path)
+
+MANAGER_DATA_DIR=$DATADIR/requiem-manager
+AC_SUBST(MANAGER_DATA_DIR)
+AC_SUBST(configdir)
+AC_SUBST(localstatedir)
+AC_SUBST(manager_run_dir)
+AC_SUBST(manager_scheduler_dir)
+AC_SUBST(manager_failover_dir)
+AC_SUBST(LIBWRAP_LIBS)
+AC_SUBST(CFLAGS)
+AC_SUBST(CPPFLAGS)
+AC_SUBST(LDFLAGS)
+AC_SUBST(GLOBAL_CFLAGS)
+AC_SUBST(REQUIEM_MANAGER_CFLAGS)
+
+AC_CONFIG_FILES([
+
+Makefile
+docs/Makefile
+docs/manpages/Makefile
+
+libev/Makefile
+libmissing/Makefile
+libmissing/tests/Makefile
+
+m4/Makefile
+
+requiem-manager.conf
+
+src/Makefile
+src/include/Makefile
+
+plugins/Makefile
+
+plugins/decodes/Makefile
+plugins/decodes/normalize/Makefile
+
+plugins/filters/Makefile
+plugins/filters/idmef-criteria/Makefile
+plugins/filters/thresholding/Makefile
+
+plugins/reports/Makefile
+plugins/reports/db/Makefile
+plugins/reports/debug/Makefile
+plugins/reports/relaying/Makefile
+plugins/reports/smtp/Makefile
+plugins/reports/textmod/Makefile
+plugins/reports/xmlmod/Makefile
+])
+AC_OUTPUT
+
+echo
+echo "*** Dumping configuration ***"
+echo "    - TCP wrapper support    : $with_libwrap";
+echo "    - XML plugin support     : $enable_xmlmod";
+echo "    - Database plugin support: $enable_librequiemdb";
